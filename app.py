@@ -36,11 +36,11 @@ class HuggingFaceInferenceEmbeddings(Embeddings):
     def __init__(self, api_key, model_name):
         self.client = InferenceClient(token=api_key)
         self.model_name = model_name
-        print(f" Using Hugging Face Inference API for embeddings (model: {model_name})")
+        
     
     def embed_documents(self, texts):
         """Embed a list of documents."""
-        print(f"Embedding {len(texts)} documents via HF Inference API...")
+       
         embeddings = []
        
         batch_size = 10
@@ -50,7 +50,7 @@ class HuggingFaceInferenceEmbeddings(Embeddings):
                 result = self.client.feature_extraction(text, model=self.model_name)
                
                 embeddings.append(result)
-        print(f"✓ Successfully embedded {len(embeddings)} documents")
+       
         return embeddings
     
     def embed_query(self, text):
@@ -158,22 +158,22 @@ def create_vector_embeddings():
         st.warning(" No documents were loaded.")
         return
     
-    st.info(f" Loaded {len(all_docs)} pages/documents from {len(files_to_process)} file(s)")
+ 
     
     # Split documents into chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     new_documents = text_splitter.split_documents(all_docs[:50])
-    st.info(f"Split into {len(new_documents)} chunks")
+    
     
     # Create or append to vector store
     if "vectors" not in st.session_state:
         # First time: create new vector store
-        st.info(" Creating new vector database...")
+    
         st.session_state.vectors = FAISS.from_documents(new_documents, emb)
         st.session_state.total_chunks = len(new_documents)
     else:
         # Append to existing vector store
-        st.info(f"Adding {len(new_documents)} new chunks to existing vector database...")
+  
         # Create embeddings for new documents
         new_vector_store = FAISS.from_documents(new_documents, emb)
         # Merge with existing vector store
@@ -182,7 +182,7 @@ def create_vector_embeddings():
     
     # Update the list of processed files
     st.session_state.uploaded_file_names = current_file_names
-    st.success(f"Vector database now contains {st.session_state.total_chunks} total chunks")
+    st.success(f"Embeddings created successfully. ")
 
 user_prompt = st.text_input(" Enter your query about the documents")
 

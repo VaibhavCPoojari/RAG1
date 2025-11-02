@@ -55,6 +55,12 @@ def initialize_session_state():
     
     if "show_embedding_success" not in st.session_state:
         st.session_state.show_embedding_success = False
+    
+    if "query_submitted" not in st.session_state:
+        st.session_state.query_submitted = False
+    
+    if "current_query" not in st.session_state:
+        st.session_state.current_query = ""
 
 
 def create_vector_embeddings(uploaded_files, embeddings):
@@ -185,11 +191,13 @@ def main():
         st.toast("Embeddings created successfully", icon="✅")
         st.session_state.show_embedding_success = False
     
-    # Query input section
-    user_prompt = st.text_input("Enter your query about the documents")
+    # Query input section with form to prevent auto-rerun
+    with st.form(key="query_form", clear_on_submit=False):
+        user_prompt = st.text_input("Enter your query about the documents", key="query_input")
+        submit_button = st.form_submit_button("Submit Query")
     
-    # Process query when entered
-    if user_prompt:
+    # Process query only when form is submitted (Enter key or button click)
+    if submit_button and user_prompt:
         process_query(user_prompt)
 
 

@@ -96,49 +96,58 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     st.success(f"✓ {len(uploaded_files)} file(s) uploaded")
+    # Clear existing vectors when new files are uploaded
+    if "uploaded_file_names" in st.session_state:
+        current_files = [f.name for f in uploaded_files]
+        if current_files != st.session_state.uploaded_file_names:
+            if "vectors" in st.session_state:
+                del st.session_state.vectors
+                st.info("🔄 New files detected. Please create embeddings again.")
 
 def create_vector_embeddings():
-    if "vectors" not in st.session_state:
-        st.session_state.embeddings=emb
-         
-        st.info("Loading documents from uploaded files...")
-        all_docs = []
-        for uploaded_file in uploaded_files:
-            file_extension = uploaded_file.name.split('.')[-1].lower()
-            
-         
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_file_path = tmp_file.name
-            
-            
-            try:
-                if file_extension == 'pdf':
-                    loader = PyPDFLoader(tmp_file_path)
-                    docs = loader.load()
-                elif file_extension == 'txt':
-                    loader = TextLoader(tmp_file_path, encoding='utf-8')
-                    docs = loader.load()
-                else:
-                    st.warning(f"Skipping unsupported file type: {uploaded_file.name}")
-                    os.unlink(tmp_file_path)
-                    continue
-                
-                all_docs.extend(docs)
-            except Exception as e:
-                st.warning(f"Error loading {uploaded_file.name}: {str(e)}")
-            finally:
-               
-                if os.path.exists(tmp_file_path):
-                    os.unlink(tmp_file_path)
+    # Always recreate embeddings (remove the check)
+    st.session_state.embeddings=emb
+     
+    st.info("Loading documents from uploaded files...")
+    all_docs = []
+    for uploaded_file in uploaded_files:
+        file_extension = uploaded_file.name.split('.')[-1].lower()
         
-        st.session_state.docs = all_docs
-        st.info(f" Loaded {len(all_docs)} pages/documents from {len(uploaded_files)} file(s)")
+     
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_file_path = tmp_file.name
         
-        st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        st.session_state.documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:50])
-        st.info(f" Split into {len(st.session_state.documents)} chunks")
-        st.session_state.vectors=FAISS.from_documents(st.session_state.documents, st.session_state.embeddings)
+        
+        try:
+            if file_extension == 'pdf':
+                loader = PyPDFLoader(tmp_file_path)
+                docs = loader.load()
+            elif file_extension == 'txt':
+                loader = TextLoader(tmp_file_path, encoding='utf-8')
+                docs = loader.load()
+            else:
+                st.warning(f"Skipping unsupported file type: {uploaded_file.name}")
+                os.unlink(tmp_file_path)
+                continue
+            
+            all_docs.extend(docs)
+        except Exception as e:
+            st.warning(f"Error loading {uploaded_file.name}: {str(e)}")
+        finally:
+           
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+    
+    st.session_state.docs = all_docs
+    # Store the file names to track changes
+    st.session_state.uploaded_file_names = [f.name for f in uploaded_files]
+    st.info(f"✓ Loaded {len(all_docs)} pages/documents from {len(uploaded_files)} file(s)")
+    
+    st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    st.session_state.documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:50])
+    st.info(f"✓ Split into {len(st.session_state.documents)} chunks")
+    st.session_state.vectors=FAISS.from_documents(st.session_state.documents, st.session_state.embeddings)
 
 user_prompt = st.text_input(" Enter your query about the documents")
 

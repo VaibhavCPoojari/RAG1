@@ -1,223 +1,195 @@
+"""
+RAG Pipeline - Document Q&A Application
+Main Streamlit application that orchestrates document ingestion,
+processing, and question-answering using RAG.
+"""
+
 import streamlit as st
-import os
-from langchain_groq import ChatGroq
-from langchain_openai import OpenAIEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.embeddings import Embeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
-from langchain_community.vectorstores import FAISS
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_core.documents import Document
-from dotenv import load_dotenv
-import tempfile
 
- 
-try:
-    from huggingface_hub import InferenceClient
-    HAS_INFERENCE_CLIENT = True
-except ImportError:
-    HAS_INFERENCE_CLIENT = False
+# Import configuration
+from config import get_llm
 
-load_dotenv()
+# Import models
+from models import get_embeddings
 
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
-groq_api_key = os.getenv("GROQ_API_KEY")
-
-os.environ["HUGGINGFACE_API_KEY"] = os.getenv("HUGGINGFACE_API_KEY")
-huggingface_api_key = os.getenv("HUGGINGFACE_API_KEY")
-
-llm=ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0, groq_api_key=groq_api_key)
-
- 
-class HuggingFaceInferenceEmbeddings(Embeddings):
-    def __init__(self, api_key, model_name):
-        self.client = InferenceClient(token=api_key)
-        self.model_name = model_name
-        
-    
-    def embed_documents(self, texts):
-        """Embed a list of documents."""
-       
-        embeddings = []
-       
-        batch_size = 10
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
-            for text in batch:
-                result = self.client.feature_extraction(text, model=self.model_name)
-               
-                embeddings.append(result)
-       
-        return embeddings
-    
-    def embed_query(self, text):
-        """Embed a single query."""
-        return self.client.feature_extraction(text, model=self.model_name)
-
- 
-HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-
-if huggingface_api_key and HAS_INFERENCE_CLIENT:
-    emb = HuggingFaceInferenceEmbeddings(
-        api_key=huggingface_api_key,
-        model_name=HF_MODEL
-    )
-else:
-  
-    print(f" Using local HuggingFaceEmbeddings (model: {HF_MODEL})")
-    emb = HuggingFaceEmbeddings(model_name=HF_MODEL)
-
-
- 
-prompt=ChatPromptTemplate.from_template(
-    """
-    Answer the questions based on the provided context only.
-    Please provide the most accurate response based on the question
-    <context>
-    {context}
-    </context>
-    Question: {input}
-    """
+# Import services
+from services import (
+    DocumentIngestion,
+    DocumentProcessor,
+    VectorStoreManager,
+    RetrievalService
 )
 
- 
-st.title(" RAG Pipeline - Document Q&A")
-st.markdown("Ask questions about your documents using AI")
- 
-uploaded_files = st.file_uploader(
-    "Upload PDF or TXT files",
-    type=['pdf', 'txt'],
-    accept_multiple_files=True,
-    help="Upload one or more PDF or TXT files to create embeddings"
-)
+# Import utilities
+from utils import get_qa_prompt
 
-if uploaded_files:
-    st.success(f" {len(uploaded_files)} file(s) uploaded")
-    # Track which files are new
-    if "uploaded_file_names" in st.session_state:
-        current_files = [f.name for f in uploaded_files]
-        previous_files = st.session_state.uploaded_file_names
-        new_files = [f for f in current_files if f not in previous_files]
-        if new_files:
-            st.info(f" {len(new_files)} new file(s) detected: {', '.join(new_files)}")
 
-def create_vector_embeddings():
-    st.session_state.embeddings = emb
+# Initialize components
+@st.cache_resource
+def initialize_components():
+    """Initialize and cache the core components."""
+    llm = get_llm()
+    embeddings = get_embeddings()
+    prompt = get_qa_prompt()
+    processor = DocumentProcessor()
+    retrieval_service = RetrievalService(llm, prompt)
     
-    # Determine which files are new
+    return llm, embeddings, prompt, processor, retrieval_service
+
+
+# Initialize session state
+def initialize_session_state():
+    """Initialize session state variables."""
+    if "uploaded_file_names" not in st.session_state:
+        st.session_state.uploaded_file_names = []
+    
+    if "vectors" not in st.session_state:
+        st.session_state.vectors = None
+    
+    if "total_chunks" not in st.session_state:
+        st.session_state.total_chunks = 0
+    
+    if "vector_store_manager" not in st.session_state:
+        _, embeddings, _, _, _ = initialize_components()
+        st.session_state.vector_store_manager = VectorStoreManager(embeddings)
+
+
+def create_vector_embeddings(uploaded_files, embeddings):
+    """
+    Create or update vector embeddings from uploaded files.
+    
+    Args:
+        uploaded_files: List of uploaded file objects
+        embeddings: Embeddings model instance
+    """
+    # Get current and previous file names
     current_file_names = [f.name for f in uploaded_files]
     previous_file_names = st.session_state.get("uploaded_file_names", [])
     
     # Find new files
-    new_file_names = [name for name in current_file_names if name not in previous_file_names]
+    new_file_names, files_to_process = DocumentIngestion.get_new_files(
+        uploaded_files,
+        previous_file_names
+    )
     
-    if not new_file_names and "vectors" in st.session_state:
-        # No new files, vector store already exists
-        st.info(" All files already embedded. No new documents to process.")
+    # Check if there are new files to process
+    if not new_file_names and st.session_state.vectors is not None:
+        st.info("All files already embedded. No new documents to process.")
         return
     
-    # Load only new documents
-    files_to_process = [f for f in uploaded_files if f.name in new_file_names] if new_file_names else uploaded_files
+    # Display processing info
+  
     
-    if new_file_names:
-        st.info(f" Processing {len(files_to_process)} new file(s)...")
-    else:
-        st.info(f" Processing {len(files_to_process)} file(s)...")
+    # Load documents
+    all_docs, error_messages = DocumentIngestion.load_documents(files_to_process)
     
-    all_docs = []
-    for uploaded_file in files_to_process:
-        file_extension = uploaded_file.name.split('.')[-1].lower()
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_file_path = tmp_file.name
-        
-        try:
-            if file_extension == 'pdf':
-                loader = PyPDFLoader(tmp_file_path)
-                docs = loader.load()
-            elif file_extension == 'txt':
-                loader = TextLoader(tmp_file_path, encoding='utf-8')
-                docs = loader.load()
-            else:
-                st.warning(f"Skipping unsupported file type: {uploaded_file.name}")
-                os.unlink(tmp_file_path)
-                continue
-            
-            all_docs.extend(docs)
-        except Exception as e:
-            st.warning(f"Error loading {uploaded_file.name}: {str(e)}")
-        finally:
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
+    # Display any errors
+    for error in error_messages:
+        st.warning(error)
     
     if not all_docs:
-        st.warning(" No documents were loaded.")
+        st.warning("No documents were loaded.")
         return
     
- 
+    # Process documents
+    _, _, _, processor, _ = initialize_components()
+    documents = processor.split_documents(all_docs)
     
-    # Split documents into chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    new_documents = text_splitter.split_documents(all_docs[:50])
+    # Create or update vector store
+    vector_store_manager = st.session_state.vector_store_manager
     
-    
-    # Create or append to vector store
-    if "vectors" not in st.session_state:
+    if st.session_state.vectors is None:
         # First time: create new vector store
-    
-        st.session_state.vectors = FAISS.from_documents(new_documents, emb)
-        st.session_state.total_chunks = len(new_documents)
+        st.session_state.vectors = vector_store_manager.create_vector_store(documents)
+        st.session_state.total_chunks = vector_store_manager.get_total_chunks()
     else:
-        # Append to existing vector store
-  
-        # Create embeddings for new documents
-        new_vector_store = FAISS.from_documents(new_documents, emb)
-        # Merge with existing vector store
-        st.session_state.vectors.merge_from(new_vector_store)
-        st.session_state.total_chunks = st.session_state.get("total_chunks", 0) + len(new_documents)
+        # Update existing vector store
+        vector_store_manager.set_vector_store(
+            st.session_state.vectors,
+            st.session_state.total_chunks
+        )
+        st.session_state.vectors = vector_store_manager.update_vector_store(documents)
+        st.session_state.total_chunks = vector_store_manager.get_total_chunks()
     
     # Update the list of processed files
     st.session_state.uploaded_file_names = current_file_names
-    st.success(f"Embeddings created successfully. ")
+    st.success("Embeddings created successfully.")
 
-user_prompt = st.text_input(" Enter your query about the documents")
 
-if st.button(" Create Document Embeddings"):
-    if not uploaded_files:
-        st.error(" Please upload at least one PDF or TXT file first!")
-    else:
-        with st.spinner("Creating embeddings... This may take a few moments."):
-            create_vector_embeddings()
+def process_query(user_query):
+    """
+    Process user query and display results.
+    
+    Args:
+        user_query: User's question string
+    """
+    if st.session_state.vectors is None:
+        st.warning("Please create document embeddings first by clicking the 'Create Document Embeddings' button!")
+        return
+    
+    with st.spinner("Searching for relevant information..."):
+        _, _, _, _, retrieval_service = initialize_components()
+        response = retrieval_service.process_query(user_query, st.session_state.vectors)
+    
+    # Display answer
+    st.markdown("### Answer:")
+    st.write(response['answer'])
+    
+    # Display source passages
+    with st.expander("Document similarity search - View source passages"):
+        for i, doc in enumerate(response['context']):
+            st.markdown(f"**Passage {i+1}:**")
+            st.write(doc.page_content)
+            st.write("---")
 
-import time
 
-if user_prompt:
-    if "vectors" not in st.session_state:
-        st.warning(" Please create document embeddings first by clicking the ' Create Document Embeddings' button!")
-    else:
-        with st.spinner("Searching for relevant information..."):
-            document_chain=create_stuff_documents_chain(llm, prompt)
-            retriever=st.session_state.vectors.as_retriever()
-            retriever_chain=create_retrieval_chain(retriever, document_chain)
-
-            start=time.process_time()
-            response=retriever_chain.invoke({'input':user_prompt})
-            response_time = time.process_time() - start
-            
-        print(f"Response Time: {response_time} seconds")
+def main():
+    """Main application function."""
+    # Initialize session state
+    initialize_session_state()
+    
+    # Initialize components
+    _, embeddings, _, _, _ = initialize_components()
+    
+    # Page configuration
+    st.title("RAG Pipeline - Document Q&A")
+    st.markdown("Ask questions about your documents using AI")
+    
+    # File upload section
+    uploaded_files = st.file_uploader(
+        "Upload PDF or TXT files",
+        type=['pdf', 'txt'],
+        accept_multiple_files=True,
+        help="Upload one or more PDF or TXT files to create embeddings"
+    )
+    
+    # Display upload status
+    if uploaded_files:
+        st.success(f"{len(uploaded_files)} file(s) uploaded")
         
-        st.markdown("###  Answer:")
-        st.write(response['answer'])
-        
-       
+        # Track which files are new
+        if "uploaded_file_names" in st.session_state:
+            current_files = [f.name for f in uploaded_files]
+            previous_files = st.session_state.uploaded_file_names
+            new_files = [f for f in current_files if f not in previous_files]
+ 
+    
+    # Embedding creation button
+    if st.button("Create Document Embeddings"):
+        if not uploaded_files:
+            st.error("Please upload at least one PDF or TXT file first!")
+        else:
+            with st.spinner("Creating embeddings... This may take a few moments."):
+                create_vector_embeddings(uploaded_files, embeddings)
+    
+    # Query input section
+    user_prompt = st.text_input("Enter your query about the documents")
+    
+    # Process query when entered
+    if user_prompt:
+        process_query(user_prompt)
 
-        with st.expander(" Document similarity search - View source passages"):
-            for i, doc in enumerate(response['context']):
-                st.markdown(f"**Passage {i+1}:**")
-                st.write(doc.page_content)
-                st.write("---")
+
+if __name__ == "__main__":
+    main()
 

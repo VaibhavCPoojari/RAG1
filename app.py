@@ -124,7 +124,7 @@ def process_query(user_query):
         user_query: User's question string
     """
     if st.session_state.vectors is None:
-        st.warning("Please create document embeddings first by clicking the 'Create Document Embeddings' button!")
+        st.warning("Please upload at least one PDF or TXT file to create embeddings first!")
         return
     
     with st.spinner("Searching for relevant information..."):
@@ -163,23 +163,18 @@ def main():
         help="Upload one or more PDF or TXT files to create embeddings"
     )
     
-    # Display upload status
+    # Display upload status and auto-create embeddings
     if uploaded_files:
         st.success(f"{len(uploaded_files)} file(s) uploaded")
         
         # Track which files are new
-        if "uploaded_file_names" in st.session_state:
-            current_files = [f.name for f in uploaded_files]
-            previous_files = st.session_state.uploaded_file_names
-            new_files = [f for f in current_files if f not in previous_files]
- 
-    
-    # Embedding creation button
-    if st.button("Create Document Embeddings"):
-        if not uploaded_files:
-            st.error("Please upload at least one PDF or TXT file first!")
-        else:
-            with st.spinner("Creating embeddings... This may take a few moments."):
+        current_files = [f.name for f in uploaded_files]
+        previous_files = st.session_state.get("uploaded_file_names", [])
+        new_files = [f for f in current_files if f not in previous_files]
+        
+        # Automatically create embeddings if there are new files
+        if new_files or st.session_state.vectors is None:
+            with st.spinner(f"Processing {len(new_files) if new_files else len(uploaded_files)} file(s) and creating embeddings... This may take a few moments."):
                 create_vector_embeddings(uploaded_files, embeddings)
     
     # Query input section

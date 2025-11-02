@@ -67,7 +67,7 @@ if huggingface_api_key and HAS_INFERENCE_CLIENT:
     )
 else:
   
-    print(f"✓ Using local HuggingFaceEmbeddings (model: {HF_MODEL})")
+    print(f" Using local HuggingFaceEmbeddings (model: {HF_MODEL})")
     emb = HuggingFaceEmbeddings(model_name=HF_MODEL)
 
 
@@ -95,29 +95,45 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    st.success(f"✓ {len(uploaded_files)} file(s) uploaded")
-    # Clear existing vectors when new files are uploaded
+    st.success(f" {len(uploaded_files)} file(s) uploaded")
+    # Track which files are new
     if "uploaded_file_names" in st.session_state:
         current_files = [f.name for f in uploaded_files]
-        if current_files != st.session_state.uploaded_file_names:
-            if "vectors" in st.session_state:
-                del st.session_state.vectors
-                st.info("🔄 New files detected. Please create embeddings again.")
+        previous_files = st.session_state.uploaded_file_names
+        new_files = [f for f in current_files if f not in previous_files]
+        if new_files:
+            st.info(f" {len(new_files)} new file(s) detected: {', '.join(new_files)}")
 
 def create_vector_embeddings():
-    # Always recreate embeddings (remove the check)
-    st.session_state.embeddings=emb
-     
-    st.info("Loading documents from uploaded files...")
+    st.session_state.embeddings = emb
+    
+    # Determine which files are new
+    current_file_names = [f.name for f in uploaded_files]
+    previous_file_names = st.session_state.get("uploaded_file_names", [])
+    
+    # Find new files
+    new_file_names = [name for name in current_file_names if name not in previous_file_names]
+    
+    if not new_file_names and "vectors" in st.session_state:
+        # No new files, vector store already exists
+        st.info(" All files already embedded. No new documents to process.")
+        return
+    
+    # Load only new documents
+    files_to_process = [f for f in uploaded_files if f.name in new_file_names] if new_file_names else uploaded_files
+    
+    if new_file_names:
+        st.info(f" Processing {len(files_to_process)} new file(s)...")
+    else:
+        st.info(f" Processing {len(files_to_process)} file(s)...")
+    
     all_docs = []
-    for uploaded_file in uploaded_files:
+    for uploaded_file in files_to_process:
         file_extension = uploaded_file.name.split('.')[-1].lower()
         
-     
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
-        
         
         try:
             if file_extension == 'pdf':
@@ -135,30 +151,47 @@ def create_vector_embeddings():
         except Exception as e:
             st.warning(f"Error loading {uploaded_file.name}: {str(e)}")
         finally:
-           
             if os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
     
-    st.session_state.docs = all_docs
-    # Store the file names to track changes
-    st.session_state.uploaded_file_names = [f.name for f in uploaded_files]
-    st.info(f"✓ Loaded {len(all_docs)} pages/documents from {len(uploaded_files)} file(s)")
+    if not all_docs:
+        st.warning(" No documents were loaded.")
+        return
     
-    st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    st.session_state.documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:50])
-    st.info(f"✓ Split into {len(st.session_state.documents)} chunks")
-    st.session_state.vectors=FAISS.from_documents(st.session_state.documents, st.session_state.embeddings)
+    st.info(f" Loaded {len(all_docs)} pages/documents from {len(files_to_process)} file(s)")
+    
+    # Split documents into chunks
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    new_documents = text_splitter.split_documents(all_docs[:50])
+    st.info(f"Split into {len(new_documents)} chunks")
+    
+    # Create or append to vector store
+    if "vectors" not in st.session_state:
+        # First time: create new vector store
+        st.info(" Creating new vector database...")
+        st.session_state.vectors = FAISS.from_documents(new_documents, emb)
+        st.session_state.total_chunks = len(new_documents)
+    else:
+        # Append to existing vector store
+        st.info(f"Adding {len(new_documents)} new chunks to existing vector database...")
+        # Create embeddings for new documents
+        new_vector_store = FAISS.from_documents(new_documents, emb)
+        # Merge with existing vector store
+        st.session_state.vectors.merge_from(new_vector_store)
+        st.session_state.total_chunks = st.session_state.get("total_chunks", 0) + len(new_documents)
+    
+    # Update the list of processed files
+    st.session_state.uploaded_file_names = current_file_names
+    st.success(f"Vector database now contains {st.session_state.total_chunks} total chunks")
 
 user_prompt = st.text_input(" Enter your query about the documents")
 
-if st.button("Create Document Embeddings"):
+if st.button(" Create Document Embeddings"):
     if not uploaded_files:
         st.error(" Please upload at least one PDF or TXT file first!")
     else:
         with st.spinner("Creating embeddings... This may take a few moments."):
             create_vector_embeddings()
-        st.success(" Document Embedding Created Successfully")
-        st.write("Your vector database is ready")
 
 import time
 

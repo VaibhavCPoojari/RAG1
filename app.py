@@ -9,8 +9,9 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain_community.vectorstores import FAISS
-from langchain_community.document_loaders import PyPDFDirectoryLoader
+from langchain_community.document_loaders import PyPDFLoader
 from dotenv import load_dotenv
+import tempfile
 
 # Import for Inference API
 try:
@@ -81,39 +82,86 @@ prompt=ChatPromptTemplate.from_template(
     """
 )
 
+# Streamlit UI
+st.title(" RAG Pipeline - Document Q&A")
+st.markdown("Ask questions about your documents using AI")
+
+# File upload
+uploaded_files = st.file_uploader(
+    " Upload PDF files",
+    type=['pdf'],
+    accept_multiple_files=True,
+    help="Upload one or more PDF files to create embeddings"
+)
+
+if uploaded_files:
+    st.success(f"✓ {len(uploaded_files)} file(s) uploaded")
+
 def create_vector_embeddings():
     if "vectors" not in st.session_state:
         st.session_state.embeddings=emb
-        st.session_state.loader=PyPDFDirectoryLoader("researchpapers")
-        st.session_state.docs=st.session_state.loader.load()
+        
+        # Load from uploaded files
+        st.info("Loading documents from uploaded files...")
+        all_docs = []
+        for uploaded_file in uploaded_files:
+            # Save uploaded file to temporary location
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                tmp_file_path = tmp_file.name
+            
+            # Load the PDF
+            loader = PyPDFLoader(tmp_file_path)
+            docs = loader.load()
+            all_docs.extend(docs)
+            
+            # Clean up temp file
+            os.unlink(tmp_file_path)
+        
+        st.session_state.docs = all_docs
+        st.info(f"✓ Loaded {len(all_docs)} pages from {len(uploaded_files)} file(s)")
+        
         st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         st.session_state.documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:50])
+        st.info(f"✓ Split into {len(st.session_state.documents)} chunks")
         st.session_state.vectors=FAISS.from_documents(st.session_state.documents, st.session_state.embeddings)
 
-user_prompt = st.text_input("Enter your Query from the research papers")
+user_prompt = st.text_input(" Enter your query about the documents")
 
-if st.button("Document Embedding"):
-    create_vector_embeddings()
-    st.success("Document Embedding Created Successfully")
-    st.write("Your vector database is ready")
+if st.button(" Create Document Embeddings"):
+    if not uploaded_files:
+        st.error("Please upload at least one PDF file first!")
+    else:
+        with st.spinner("Creating embeddings... This may take a few moments."):
+            create_vector_embeddings()
+        st.success(" Document Embedding Created Successfully")
+        st.write("Your vector database is ready")
 
 import time
 
 if user_prompt:
     if "vectors" not in st.session_state:
-        st.warning("⚠️ Please click 'Document Embedding' button first to create the vector database!")
+        st.warning(" Please create document embeddings first by clicking the ' Create Document Embeddings' button!")
     else:
-        document_chain=create_stuff_documents_chain(llm, prompt)
-        retriever=st.session_state.vectors.as_retriever()
-        retriever_chain=create_retrieval_chain(retriever, document_chain)
+        with st.spinner("Searching for relevant information..."):
+            document_chain=create_stuff_documents_chain(llm, prompt)
+            retriever=st.session_state.vectors.as_retriever()
+            retriever_chain=create_retrieval_chain(retriever, document_chain)
 
-        start=time.process_time()
-        response=retriever_chain.invoke({'input':user_prompt})
-        print(f"Response Time: {time.process_time() - start} seconds")
+            start=time.process_time()
+            response=retriever_chain.invoke({'input':user_prompt})
+            response_time = time.process_time() - start
+            
+        print(f"Response Time: {response_time} seconds")
+        
+        st.markdown("###  Answer:")
         st.write(response['answer'])
+        
+       
 
-        with st.expander("Document similarity search"):
+        with st.expander(" Document similarity search - View source passages"):
             for i, doc in enumerate(response['context']):
+                st.markdown(f"**Passage {i+1}:**")
                 st.write(doc.page_content)
-                st.write("-----------------------------")
+                st.write("---")
 

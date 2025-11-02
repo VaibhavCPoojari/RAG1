@@ -52,6 +52,9 @@ def initialize_session_state():
     if "vector_store_manager" not in st.session_state:
         _, embeddings, _, _, _ = initialize_components()
         st.session_state.vector_store_manager = VectorStoreManager(embeddings)
+    
+    if "show_embedding_success" not in st.session_state:
+        st.session_state.show_embedding_success = False
 
 
 def create_vector_embeddings(uploaded_files, embeddings):
@@ -74,16 +77,12 @@ def create_vector_embeddings(uploaded_files, embeddings):
     
     # Check if there are new files to process
     if not new_file_names and st.session_state.vectors is not None:
-        st.info("All files already embedded. No new documents to process.")
         return
-    
-    # Display processing info
-  
     
     # Load documents
     all_docs, error_messages = DocumentIngestion.load_documents(files_to_process)
     
-    # Display any errors
+    # Display any errors (they will auto-hide on next rerun)
     for error in error_messages:
         st.warning(error)
     
@@ -113,7 +112,7 @@ def create_vector_embeddings(uploaded_files, embeddings):
     
     # Update the list of processed files
     st.session_state.uploaded_file_names = current_file_names
-    st.success("Embeddings created successfully.")
+    st.session_state.show_embedding_success = True
 
 
 def process_query(user_query):
@@ -165,17 +164,26 @@ def main():
     
     # Display upload status and auto-create embeddings
     if uploaded_files:
-        st.success(f"{len(uploaded_files)} file(s) uploaded")
-        
         # Track which files are new
         current_files = [f.name for f in uploaded_files]
         previous_files = st.session_state.get("uploaded_file_names", [])
         new_files = [f for f in current_files if f not in previous_files]
         
+        # Show upload success only if there are new files
+        if new_files:
+            st.toast(f"{len(new_files)} new file(s) uploaded", icon="✅")
+        
         # Automatically create embeddings if there are new files
         if new_files or st.session_state.vectors is None:
             with st.spinner(f"Processing {len(new_files) if new_files else len(uploaded_files)} file(s) and creating embeddings... This may take a few moments."):
                 create_vector_embeddings(uploaded_files, embeddings)
+    else:
+        st.session_state.show_embedding_success = False
+    
+    # Show embedding success message
+    if st.session_state.show_embedding_success:
+        st.toast("Embeddings created successfully", icon="✅")
+        st.session_state.show_embedding_success = False
     
     # Query input section
     user_prompt = st.text_input("Enter your query about the documents")

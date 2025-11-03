@@ -5,7 +5,7 @@ Provides both API-based and local embedding options.
 
 from langchain_core.embeddings import Embeddings
 from langchain_huggingface import HuggingFaceEmbeddings
-from config.settings import HUGGINGFACE_API_KEY, EMBEDDING_MODEL_NAME, EMBEDDING_BATCH_SIZE, check_dependencies
+from config.settings import HUGGINGFACE_API_KEY, EMBEDDING_MODEL_NAME, EMBEDDING_BATCH_SIZE
 
 
 class HuggingFaceInferenceEmbeddings(Embeddings):
@@ -67,14 +67,10 @@ def get_embeddings():
     Returns:
         Embeddings: An instance of embeddings model (API-based or local)
     """
-    dependencies = check_dependencies()
-    
-    if HUGGINGFACE_API_KEY and dependencies.get('inference_client', False):
-        print(f"Using HuggingFace Inference API (model: {EMBEDDING_MODEL_NAME})")
-        return HuggingFaceInferenceEmbeddings(
+ 
+    print(f"Using HuggingFace Inference API (model: {EMBEDDING_MODEL_NAME})")
+    return HuggingFaceInferenceEmbeddings(
             api_key=HUGGINGFACE_API_KEY,
             model_name=EMBEDDING_MODEL_NAME
         )
-    else:
-        print(f"Using local HuggingFaceEmbeddings (model: {EMBEDDING_MODEL_NAME})")
-        return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+ 

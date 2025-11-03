@@ -46,19 +46,4 @@ def get_llm():
     )
 
 
-def check_dependencies():
-    """
-    Check if optional dependencies are available.
-    
-    Returns:
-        dict: Dictionary with availability status of dependencies
-    """
-    dependencies = {}
-    
-    try:
-        from huggingface_hub import InferenceClient
-        dependencies['inference_client'] = True
-    except ImportError:
-        dependencies['inference_client'] = False
-    
-    return dependencies
+ 

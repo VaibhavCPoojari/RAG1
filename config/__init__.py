@@ -11,7 +11,7 @@ from .settings import (
     MAX_DOCUMENTS_TO_PROCESS,
     EMBEDDING_BATCH_SIZE,
     get_llm,
-    check_dependencies
+   
 )
 
 __all__ = [
@@ -25,5 +25,5 @@ __all__ = [
     'MAX_DOCUMENTS_TO_PROCESS',
     'EMBEDDING_BATCH_SIZE',
     'get_llm',
-    'check_dependencies'
+   
 ]
